@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#171b20" />
+    <title>Demo Shop — Admin</title>
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="login-panel" id="login-panel">
+        <div class="brand-mark">SA / 001</div>
+        <p class="eyebrow">Private admin access</p>
+        <h1>Archive console.</h1>
+        <form id="login-form">
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" required />
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+          <button type="submit" id="login-button">Enter console</button>
+          <p class="form-message" id="login-message" role="status"></p>
+        </form>
+      </section>
+
+      <section class="dashboard" id="dashboard" hidden>
+        <header class="dashboard-header">
+          <div>
+            <p class="eyebrow">Demo Shop / Private</p>
+            <h1>Submissions.</h1>
+          </div>
+          <button class="logout-button" id="logout-button" type="button">Sign out</button>
+        </header>
+
+        <div class="metrics">
+          <article><span>Total submissions</span><strong id="total-count">0</strong></article>
+          <article><span>Items selected</span><strong id="item-count">0</strong></article>
+          <article><span>Demo subtotal</span><strong id="subtotal-count">$0</strong></article>
+        </div>
+
+        <section class="catalog-panel">
+          <div class="catalog-header">
+            <div><p class="eyebrow">Storefront catalog</p><h2>Add an item</h2></div>
+          </div>
+          <form class="item-form" id="item-form">
+            <label>Item name<input name="name" required placeholder="Example Item" /></label>
+            <label>Category<select name="category" required><option value="Form">Form</option><option value="Paper">Paper</option><option value="Studio">Studio</option></select></label>
+            <label>Description<input name="detail" required placeholder="Object study · Series D" /></label>
+            <label>Price<input name="price" type="number" min="0" step="1" required placeholder="40" /></label>
+            <label class="image-field">Image<input name="image" type="file" accept="image/*" required /></label>
+            <button type="submit" id="upload-button">Upload item</button>
+            <p class="form-message" id="upload-message" role="status"></p>
+          </form>
+        </section>
+
+        <div class="admin-products" id="admin-products"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Reference</th><th>Session</th><th>Items</th><th>Subtotal</th><th>Received</th></tr></thead>
+            <tbody id="submission-rows"></tbody>
+          </table>
+          <p class="empty-admin" id="empty-admin">No submissions yet.</p>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const loginPanel = document.querySelector("#login-panel");
+      const dashboard = document.querySelector("#dashboard");
+      const loginForm = document.querySelector("#login-form");
+      const loginMessage = document.querySelector("#login-message");
+
+      async function loadDashboard() {
+        try {
+          if (location.protocol === "file:") {
+            throw new Error("Open this page through the demo server.");
+          }
+          const status = await fetch("/api/admin/status", { cache: "no-store" });
+          if (!status.ok) throw new Error("Unauthorized");
+          loginPanel.hidden = true;
+          dashboard.hidden = false;
+          await loadSubmissions();
+          await loadProducts();
+        } catch {
+          loginPanel.hidden = false;
+          dashboard.hidden = true;
+          if (location.protocol === "file:") {
+            loginMessage.textContent = "Open this console through the demo server at /admin.";
+          }
+        }
+      }
+
+      async function loadProducts() {
+        const response = await fetch("/api/admin/products", { cache: "no-store" });
+        if (!response.ok) throw new Error("Could not load products");
+        const data = await response.json();
+        document.querySelector("#admin-products").innerHTML = data.products.map((product) => `
+          <article class="admin-product">
+            <img src="${product.image}" alt="" />
+            <div><strong>${product.name}</strong><span>${product.category} · $${product.price}</span></div>
+            <button type="button" data-delete-product="${product.id}">Remove</button>
+          </article>
+        `).join("");
+      }
+
+      async function loadSubmissions() {
+        const response = await fetch("/api/admin/submissions", { cache: "no-store" });
+        if (!response.ok) throw new Error("Could not load submissions");
+        const data = await response.json();
+        const submissions = data.submissions;
+        const itemCount = submissions.reduce((sum, entry) => sum + entry.items.reduce((items, item) => items + item.quantity, 0), 0);
+        const subtotal = submissions.reduce((sum, entry) => sum + entry.subtotal, 0);
+        document.querySelector("#total-count").textContent = submissions.length;
+        document.querySelector("#item-count").textContent = itemCount;
+        document.querySelector("#subtotal-count").textContent = `$${subtotal}`;
+        document.querySelector("#empty-admin").hidden = submissions.length > 0;
+        document.querySelector("#submission-rows").innerHTML = submissions.map((entry) => {
+          const date = new Date(entry.receivedAt).toLocaleString();
+          const itemNames = entry.items.map((item) => `${item.name} × ${item.quantity}`).join(", ");
+          return `<tr><td><strong>${entry.reference}</strong></td><td>${entry.sessionId}</td><td>${itemNames}</td><td>$${entry.subtotal}</td><td>${date}</td></tr>`;
+        }).join("");
+      }
+
+      loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = document.querySelector("#login-button");
+        button.disabled = true;
+        loginMessage.textContent = "Checking access…";
+        const form = new FormData(loginForm);
+        try {
+          const response = await fetch("/api/admin/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: form.get("username"), password: form.get("password") })
+          });
+          const result = await response.json();
+          if (response.ok) {
+            loginForm.reset();
+            await loadDashboard();
+          } else if (result.status === "unconfigured") {
+            loginMessage.textContent = "Admin access is not configured on this server.";
+          } else if (result.status === "locked") {
+            loginMessage.textContent = "Access locked for 15 minutes after four failed attempts.";
+          } else {
+            loginMessage.textContent = `Incorrect credentials. ${result.remainingAttempts} attempt${result.remainingAttempts === 1 ? "" : "s"} remaining.`;
+          }
+        } catch {
+          if (location.protocol === "file:") {
+            loginMessage.textContent = "Open this console through the demo server at /admin.";
+          } else {
+            loginMessage.textContent = "Could not reach the private console. Make sure the demo server is running.";
+          }
+        }
+        button.disabled = false;
+      });
+
+      document.querySelector("#logout-button").addEventListener("click", async () => {
+        await fetch("/api/admin/logout", { method: "POST" });
+        window.location.reload();
+      });
+
+      document.querySelector("#item-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const formData = new FormData(form);
+        const file = formData.get("image");
+        const message = document.querySelector("#upload-message");
+        const button = document.querySelector("#upload-button");
+
+        if (!(file instanceof File) || file.size === 0) {
+          message.textContent = "Choose an image for the item.";
+          return;
+        }
+        if (file.size > 4 * 1024 * 1024) {
+          message.textContent = "Choose an image smaller than 4 MB.";
+          return;
+        }
+
+        button.disabled = true;
+        message.textContent = "Uploading item…";
+        try {
+          const image = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error("Could not read image"));
+            reader.readAsDataURL(file);
+          });
+          const response = await fetch("/api/admin/products", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: formData.get("name"),
+              category: formData.get("category"),
+              detail: formData.get("detail"),
+              price: formData.get("price"),
+              image
+            })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || "Could not upload item");
+          form.reset();
+          message.textContent = `${result.product.name} is now live in the storefront.`;
+          await loadProducts();
+        } catch (error) {
+          message.textContent = error.message;
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      document.querySelector("#admin-products").addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-delete-product]");
+        if (!button) return;
+        button.disabled = true;
+        const response = await fetch(`/api/admin/products/${encodeURIComponent(button.dataset.deleteProduct)}`, { method: "DELETE" });
+        if (response.ok) {
+          await loadProducts();
+        } else {
+          button.disabled = false;
+          document.querySelector("#upload-message").textContent = "Could not remove that item.";
+        }
+      });
+
+      loadDashboard();
+    </script>
+  </body>
+</html>
